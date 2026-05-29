@@ -1,7 +1,7 @@
-numpy==1.26.4
-pygame==2.5.2
-pettingzoo==1.24.3
-gymnasium==1.2.2
-ray[rllib]==2.55.1
-supersuit==3.9.2
+numpy
+pygame
+pettingzoo
+gymnasium
+ray[rllib]
+supersuit
 torch

@@ -16,6 +16,8 @@ def env_creator(args):
 
 
 def eval_episode(algo, save_dir, max_steps=1000):
+    os.environ.setdefault("XDG_RUNTIME_DIR", "/tmp")
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.makedirs(save_dir, exist_ok=True)
     env = ParallelPettingZooEnv(FootballEnv(render_mode="rgb_array"))
     obs, _ = env.reset()
@@ -83,6 +85,8 @@ if __name__ == "__main__":
     for i in range(100): # Train for 100 iterations
         result = algo.train()
         mean_reward = result.get("episode_reward_mean")
+        if mean_reward is None:
+            mean_reward = result.get("env_runners", {}).get("episode_reward_mean")
         if mean_reward is None:
             mean_reward = result.get("sampler_results", {}).get("episode_reward_mean")
         if mean_reward is None:
