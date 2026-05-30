@@ -77,8 +77,8 @@ class RoleBasedRewardCalculator:
         if dist_team0 is None or dist_team1 is None:
             return rewards
 
-        new_dist_team0 = math.hypot(ball["x"] - WIDTH, ball["y"] - HEIGHT / 2.0)
-        new_dist_team1 = math.hypot(ball["x"] - 0.0, ball["y"] - HEIGHT / 2.0)
+        new_dist_team0 = math.hypot(ball["x"] - self.width, ball["y"] - self.height / 2.0)
+        new_dist_team1 = math.hypot(ball["x"] - 0.0, ball["y"] - self.height / 2.0)
         progress_team0 = dist_team0 - new_dist_team0
         progress_team1 = dist_team1 - new_dist_team1
 
@@ -154,9 +154,9 @@ class RoleBasedRewardCalculator:
         rewards = np.zeros(num_agents, dtype=np.float32)
         out_of_bounds = (
             ball["x"] < 0
-            or ball["x"] > WIDTH
+            or ball["x"] > self.width
             or ball["y"] < 0
-            or ball["y"] > HEIGHT
+            or ball["y"] > self.height
         )
         last_touch_idx = ball.get("last_touch_idx", -1)
         if out_of_bounds and last_touch_idx != -1:

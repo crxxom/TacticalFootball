@@ -1,6 +1,9 @@
 from enum import Enum
 from dataclasses import dataclass
 from typing import List, Dict
+import math
+import os
+import json
 
 # --- Physics Constants ---
 WIDTH, HEIGHT = 1280, 800
@@ -18,7 +21,7 @@ BALL_OWNER_OFFSET = PLAYER_RADIUS + BALL_RADIUS
 POSSESSION_DISTANCE_BUFFER = 6
 POSSESSION_COOLDOWN_FRAMES = 10
 
-OUT_OF_BOUNDS_PENALTY = -10.0
+OUT_OF_BOUNDS_PENALTY = -30.0
 GOAL_REWARD = 100.0
 GOAL_TEAM_REWARD = 10.0
 GOAL_ASSIST_REWARD = 30.0
@@ -48,10 +51,11 @@ PASS_FACING_POWER_ERROR = 0.05
 
 
 class AgentRole(Enum):
+    GENERIC = "generic"
     TARGET_MAN = "target_man"
     PLAYMAKER = "playmaker"
     ANCHOR_DEFENDER = "anchor"
-    GENERIC = "generic"
+   
 
 @dataclass
 class CurriculumStage:
@@ -65,8 +69,8 @@ CURRICULUM = {
     "1v1": CurriculumStage(
         name="1v1", 
         team_size=1,
-        blue_roles=[AgentRole.TARGET_MAN],
-        red_roles=[AgentRole.ANCHOR_DEFENDER]
+        blue_roles=[AgentRole.GENERIC],
+        red_roles=[AgentRole.GENERIC]
     ),
     "3v3": CurriculumStage(
         name="3v3", 
@@ -86,3 +90,40 @@ CURRICULUM = {
 # The absolute maximum size of the environment dictates the Neural Net input layer size
 MAX_TEAMMATES = 10
 MAX_ENEMIES = 11
+
+LAYOUTS_DIR = os.path.join(os.path.dirname(__file__), "layouts")
+
+def _default_stage_layout():
+    return {
+        "pitch": {"width": WIDTH, "height": HEIGHT},
+        "ball": {"x": WIDTH // 2, "y": HEIGHT // 2},
+        "players": {},
+    }
+
+def load_stage_layout(stage_name, layout_path=None, layout_dir=None):
+    if layout_path:
+        path = layout_path
+    else:
+        layout_root = layout_dir or LAYOUTS_DIR
+        path = os.path.join(layout_root, f"{stage_name}.json")
+
+    if not os.path.isfile(path):
+        return _default_stage_layout()
+
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    layout = _default_stage_layout()
+    pitch = data.get("pitch") or {}
+    layout["pitch"]["width"] = int(pitch.get("width", layout["pitch"]["width"]))
+    layout["pitch"]["height"] = int(pitch.get("height", layout["pitch"]["height"]))
+
+    ball = data.get("ball") or {}
+    layout["ball"]["x"] = float(ball.get("x", layout["ball"]["x"]))
+    layout["ball"]["y"] = float(ball.get("y", layout["ball"]["y"]))
+
+    players = data.get("players") or {}
+    if isinstance(players, dict):
+        layout["players"] = players
+
+    return layout

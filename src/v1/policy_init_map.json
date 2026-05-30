@@ -1,0 +1,18 @@
+{
+  "policy_generic": {
+    "source_policy": "policy_generic",
+    "checkpoint": null
+  },
+  "policy_target_man": {
+    "source_policy": "policy_generic",
+    "checkpoint": null
+  },
+  "policy_playmaker": {
+    "source_policy": "policy_generic",
+    "checkpoint": null
+  },
+  "policy_anchor": {
+    "source_policy": "policy_generic",
+    "checkpoint": null
+  }
+}

@@ -9,13 +9,14 @@ from ray.rllib.env.apis.task_settable_env import TaskSettableEnv
 # Imports from your modular architecture
 from config import (
     CURRICULUM, WIDTH, HEIGHT, MAX_TEAMMATES, MAX_ENEMIES,
-    FPS, DT, MAX_PLAYER_SPEED, MAX_SHOT_SPEED, FRICTION, 
-    PLAYER_RADIUS, GOAL_HALF_HEIGHT, BALL_RADIUS, BALL_COLOR, 
-    BALL_OUTLINE_COLOR, BALL_OWNER_OFFSET, POSSESSION_DISTANCE_BUFFER, 
+    FPS, DT, MAX_PLAYER_SPEED, MAX_SHOT_SPEED, FRICTION,
+    PLAYER_RADIUS, GOAL_HALF_HEIGHT, BALL_RADIUS, BALL_COLOR,
+    BALL_OUTLINE_COLOR, BALL_OWNER_OFFSET, POSSESSION_DISTANCE_BUFFER,
     POSSESSION_COOLDOWN_FRAMES, ROTATION_SPEED, PRESSURE_RADIUS,
-    PASS_BASE_ANGLE_ERROR, PASS_POWER_ANGLE_ERROR, PASS_PRESSURE_ANGLE_ERROR, 
-    PASS_FACING_ANGLE_ERROR, PASS_BASE_POWER_ERROR, PASS_POWER_POWER_ERROR, 
-    PASS_PRESSURE_POWER_ERROR, PASS_FACING_POWER_ERROR, TEAM_REWARD_WEIGHT
+    PASS_BASE_ANGLE_ERROR, PASS_POWER_ANGLE_ERROR, PASS_PRESSURE_ANGLE_ERROR,
+    PASS_FACING_ANGLE_ERROR, PASS_BASE_POWER_ERROR, PASS_POWER_POWER_ERROR,
+    PASS_PRESSURE_POWER_ERROR, PASS_FACING_POWER_ERROR, TEAM_REWARD_WEIGHT,
+    load_stage_layout
 )
 from observations import DynamicObservationBuilder
 from rewards import RoleBasedRewardCalculator
@@ -31,20 +32,25 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
 
     def __init__(self, render_mode=None, config=None):
         self.render_mode = render_mode
-        self.current_task = config.get("start_task", "1v1") if config else "1v1"
+        self.env_config = config or {}
+        self.current_task = self.env_config.get("start_task", "1v1")
+        self.layout_path = self.env_config.get("layout_path")
+        self.layout_dir = self.env_config.get("layout_dir")
+        self.width = WIDTH
+        self.height = HEIGHT
         
         self.screen = None
         self.render_surface = None
-        self.obs_builder = DynamicObservationBuilder(WIDTH, HEIGHT)
-        self.reward_calc = RoleBasedRewardCalculator(WIDTH, HEIGHT)
+        self.obs_builder = DynamicObservationBuilder(self.width, self.height)
+        self.reward_calc = RoleBasedRewardCalculator(self.width, self.height)
         
         if self.render_mode == "human":
             pygame.init()
-            self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+            self.screen = pygame.display.set_mode((self.width, self.height))
             self.clock = pygame.time.Clock()
         elif self.render_mode == "rgb_array":
             pygame.init()
-            self.render_surface = pygame.Surface((WIDTH, HEIGHT))
+            self.render_surface = pygame.Surface((self.width, self.height))
 
         self._setup_agents()
 
@@ -89,9 +95,25 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
         self.current_task = task
         self._setup_agents()
 
+    def _refresh_render_targets(self):
+        if self.render_mode == "human":
+            self.screen = pygame.display.set_mode((self.width, self.height))
+        elif self.render_mode == "rgb_array":
+            self.render_surface = pygame.Surface((self.width, self.height))
+
     def reset(self, seed=None, options=None):
         self.agents = self.possible_agents[:]
         self.num_moves = 0
+
+        layout = load_stage_layout(self.current_task, layout_path=self.layout_path, layout_dir=self.layout_dir)
+        new_width = int(layout["pitch"]["width"])
+        new_height = int(layout["pitch"]["height"])
+        if new_width != self.width or new_height != self.height:
+            self.width = new_width
+            self.height = new_height
+            self.obs_builder = DynamicObservationBuilder(self.width, self.height)
+            self.reward_calc = RoleBasedRewardCalculator(self.width, self.height)
+            self._refresh_render_targets()
         
         self.positions = np.zeros((self.num_agents, 2), dtype=np.float32)
         self.velocities = np.zeros((self.num_agents, 2), dtype=np.float32)
@@ -107,20 +129,29 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
             if "blue" in agent_id:
                 self.teams[idx] = 0
                 y_offset = (blue_idx - self.stage_config.team_size / 2.0) * 80
-                self.positions[idx] = [WIDTH // 4 + np.random.randint(-50, 50), HEIGHT // 2 + y_offset]
+                default_pos = [self.width // 4 + np.random.randint(-50, 50), self.height // 2 + y_offset]
                 blue_idx += 1
             else:
                 self.teams[idx] = 1
                 y_offset = (red_idx - self.stage_config.team_size / 2.0) * 80
-                self.positions[idx] = [WIDTH * 3 // 4 + np.random.randint(-50, 50), HEIGHT // 2 + y_offset]
+                default_pos = [self.width * 3 // 4 + np.random.randint(-50, 50), self.height // 2 + y_offset]
                 red_idx += 1
+
+            if agent_id in layout["players"]:
+                pos = layout["players"][agent_id]
+                self.positions[idx] = [float(pos[0]), float(pos[1])]
+            else:
+                self.positions[idx] = default_pos
+
+        self.positions[:, 0] = np.clip(self.positions[:, 0], PLAYER_RADIUS, self.width - PLAYER_RADIUS)
+        self.positions[:, 1] = np.clip(self.positions[:, 1], PLAYER_RADIUS, self.height - PLAYER_RADIUS)
                 
         self.facing[:, 0] = 1.0
         self.facing[:, 1] = 0.0
 
         self.ball = {
-            "x": WIDTH//2,
-            "y": HEIGHT//2,
+            "x": float(layout["ball"]["x"]),
+            "y": float(layout["ball"]["y"]),
             "vx": 0.0,
             "vy": 0.0,
             "owner_idx": -1,
@@ -135,9 +166,12 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
             "owner_offset_x": BALL_OWNER_OFFSET,
             "owner_offset_y": 0.0,
             "step_count": 0,
-            "prev_goal_dist_team0": math.hypot(WIDTH//2 - WIDTH, HEIGHT//2 - HEIGHT / 2.0),
-            "prev_goal_dist_team1": math.hypot(WIDTH//2 - 0.0, HEIGHT//2 - HEIGHT / 2.0),
+            "prev_goal_dist_team0": math.hypot(self.width // 2 - self.width, self.height // 2 - self.height / 2.0),
+            "prev_goal_dist_team1": math.hypot(self.width // 2 - 0.0, self.height // 2 - self.height / 2.0),
         }
+
+        self.ball["x"] = clamp(self.ball["x"], BALL_RADIUS, self.width - BALL_RADIUS)
+        self.ball["y"] = clamp(self.ball["y"], BALL_RADIUS, self.height - BALL_RADIUS)
 
         observations = {agent: self._get_local_observation(agent) for agent in self.agents}
         infos = {agent: {} for agent in self.agents}
@@ -151,6 +185,16 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
         self.num_moves += 1
         active_agents = list(self.agents)
         rewards = np.zeros(self.num_agents, dtype=np.float32)
+        event_flags = {
+            agent_id: {
+                "scored_goal": False,
+                "took_shot_in_box": False,
+                "completed_pass": False,
+                "assisted_goal": False,
+                "successful_tackle": False,
+            }
+            for agent_id in self.agents
+        }
         
         prev_owner_idx = self.ball["owner_idx"]
         prev_owner_team = self.teams[prev_owner_idx] if prev_owner_idx != -1 else None
@@ -174,8 +218,8 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
         self.facing[:, 0] = np.cos(self.facing_angle)
         self.facing[:, 1] = np.sin(self.facing_angle)
 
-        self.positions[:, 0] = np.clip(self.positions[:, 0], PLAYER_RADIUS, WIDTH - PLAYER_RADIUS)
-        self.positions[:, 1] = np.clip(self.positions[:, 1], PLAYER_RADIUS, HEIGHT - PLAYER_RADIUS)
+        self.positions[:, 0] = np.clip(self.positions[:, 0], PLAYER_RADIUS, self.width - PLAYER_RADIUS)
+        self.positions[:, 1] = np.clip(self.positions[:, 1], PLAYER_RADIUS, self.height - PLAYER_RADIUS)
 
         # Base Vectorized Rewards
         rewards += self.reward_calc.step_rewards(self.positions, self.teams, self.ball)
@@ -219,6 +263,13 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
             dir_x = math.cos(shot_angle)
             dir_y = math.sin(shot_angle)
 
+            if team == 0:
+                in_box = (self.positions[shooter, 0] > self.width - 200) and (abs(self.positions[shooter, 1] - self.height / 2.0) < GOAL_HALF_HEIGHT * 1.5)
+            else:
+                in_box = (self.positions[shooter, 0] < 200) and (abs(self.positions[shooter, 1] - self.height / 2.0) < GOAL_HALF_HEIGHT * 1.5)
+            if in_box:
+                event_flags[self.agent_ids[shooter]]["took_shot_in_box"] = True
+
             self.ball["owner_idx"] = -1
             self.ball["cooldown"] = 0
             self.ball["last_touch_idx"] = int(shooter)
@@ -226,8 +277,8 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
             self.ball["last_kick_idx"] = int(shooter)
             self.ball["last_kick_team"] = int(team)
             self.ball["last_kick_pressure"] = float(pressure)
-            enemy_goal_x = WIDTH if team == 0 else 0.0
-            enemy_goal_y = HEIGHT / 2.0
+            enemy_goal_x = self.width if team == 0 else 0.0
+            enemy_goal_y = self.height / 2.0
             self.ball["last_kick_goal_dist"] = math.hypot(self.ball["x"] - enemy_goal_x, self.ball["y"] - enemy_goal_y)
             self.ball["vx"] = dir_x * MAX_SHOT_SPEED * shot_power
             self.ball["vy"] = dir_y * MAX_SHOT_SPEED * shot_power
@@ -250,10 +301,10 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
                     self.positions[i, 1] -= ny * overlap
                     self.positions[j, 0] += nx * overlap
                     self.positions[j, 1] += ny * overlap
-                    self.positions[i, 0] = max(PLAYER_RADIUS, min(WIDTH - PLAYER_RADIUS, self.positions[i, 0]))
-                    self.positions[i, 1] = max(PLAYER_RADIUS, min(HEIGHT - PLAYER_RADIUS, self.positions[i, 1]))
-                    self.positions[j, 0] = max(PLAYER_RADIUS, min(WIDTH - PLAYER_RADIUS, self.positions[j, 0]))
-                    self.positions[j, 1] = max(PLAYER_RADIUS, min(HEIGHT - PLAYER_RADIUS, self.positions[j, 1]))
+                    self.positions[i, 0] = max(PLAYER_RADIUS, min(self.width - PLAYER_RADIUS, self.positions[i, 0]))
+                    self.positions[i, 1] = max(PLAYER_RADIUS, min(self.height - PLAYER_RADIUS, self.positions[i, 1]))
+                    self.positions[j, 0] = max(PLAYER_RADIUS, min(self.width - PLAYER_RADIUS, self.positions[j, 0]))
+                    self.positions[j, 1] = max(PLAYER_RADIUS, min(self.height - PLAYER_RADIUS, self.positions[j, 1]))
 
         # Ball Physics and Possession
         if self.ball["cooldown"] > 0:
@@ -289,11 +340,15 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
                     )
                     if pass_completed:
                         self.ball["last_passer_idx"] = self.ball["last_kick_idx"]
+                        passer_id = self.agent_ids[self.ball["last_kick_idx"]]
+                        event_flags[passer_id]["completed_pass"] = True
                     elif self.ball.get("last_kick_team") is not None and self.ball["last_kick_team"] != int(self.teams[idx]):
                         self.ball["last_passer_idx"] = -1
 
                     rewards += self.reward_calc.pass_rewards(self.ball, self.teams, idx)
                     rewards += self.reward_calc.tackle_rewards(self.teams, prev_owner_team, idx)
+                    if prev_owner_team is not None and int(self.teams[idx]) != int(prev_owner_team):
+                        event_flags[self.agent_ids[idx]]["successful_tackle"] = True
 
                     self.ball["last_kick_idx"] = -1
                     self.ball["last_kick_team"] = None
@@ -316,6 +371,13 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
         truncations = {a: False for a in self.agents}
         goal_rewards, terminated = self.reward_calc.goal_rewards(self.teams, self.ball)
         rewards += goal_rewards
+        if goal_rewards.any():
+            scorer_idx = self.ball.get("last_touch_idx", -1)
+            if scorer_idx != -1:
+                event_flags[self.agent_ids[scorer_idx]]["scored_goal"] = True
+            assister_idx = self.ball.get("last_passer_idx", -1)
+            if assister_idx != -1:
+                event_flags[self.agent_ids[assister_idx]]["assisted_goal"] = True
         out_rewards, out_of_bounds = self.reward_calc.out_of_bounds_rewards(self.ball, self.num_agents)
         rewards += out_rewards
         if out_of_bounds and not terminated:
@@ -327,24 +389,16 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
         rewards += self.reward_calc.ball_progress_rewards(self.ball, self.teams)
         
         # --- Inject Role-Based Reward Modifiers ---
-        event_flags = {
-            "scored_goal": terminated and goal_rewards.any() > 0,
-            "took_shot_in_box": False, # You can expand this logic natively
-            "completed_pass": False,
-            "assisted_goal": False,
-            "successful_tackle": False
-        }
-        
         for agent_id in self.agents:
             idx = self.agent_index[agent_id]
             role = self.agent_roles[agent_id]
-            modifier = self.reward_calc.calculate_role_modifiers(role, {}, event_flags)
+            modifier = self.reward_calc.calculate_role_modifiers(role, {}, event_flags[agent_id])
             rewards[idx] += modifier
         # -------------------------------------------
 
         self.ball["step_count"] = self.num_moves
-        self.ball["prev_goal_dist_team0"] = math.hypot(self.ball["x"] - WIDTH, self.ball["y"] - HEIGHT / 2.0)
-        self.ball["prev_goal_dist_team1"] = math.hypot(self.ball["x"] - 0.0, self.ball["y"] - HEIGHT / 2.0)
+        self.ball["prev_goal_dist_team0"] = math.hypot(self.ball["x"] - self.width, self.ball["y"] - self.height / 2.0)
+        self.ball["prev_goal_dist_team1"] = math.hypot(self.ball["x"] - 0.0, self.ball["y"] - self.height / 2.0)
 
         if terminated or any(truncations.values()):
             self.agents = []
@@ -369,11 +423,11 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
 
     def _draw(self, surface):
         surface.fill((50, 150, 50))
-        pygame.draw.rect(surface, (255, 255, 255), (0, 0, WIDTH, HEIGHT), 2)
-        pygame.draw.line(surface, (255, 255, 255), (WIDTH//2, 0), (WIDTH//2, HEIGHT), 2)
-        pygame.draw.circle(surface, (255, 255, 255), (WIDTH//2, HEIGHT//2), 60, 2)
-        pygame.draw.rect(surface, (200, 200, 50), (-10, HEIGHT//2 - 50, 20, 100))
-        pygame.draw.rect(surface, (200, 200, 50), (WIDTH - 10, HEIGHT//2 - 50, 20, 100))
+        pygame.draw.rect(surface, (255, 255, 255), (0, 0, self.width, self.height), 2)
+        pygame.draw.line(surface, (255, 255, 255), (self.width // 2, 0), (self.width // 2, self.height), 2)
+        pygame.draw.circle(surface, (255, 255, 255), (self.width // 2, self.height // 2), 60, 2)
+        pygame.draw.rect(surface, (200, 200, 50), (-10, self.height // 2 - 50, 20, 100))
+        pygame.draw.rect(surface, (200, 200, 50), (self.width - 10, self.height // 2 - 50, 20, 100))
 
         for idx in range(self.num_agents):
             color = (50, 100, 200) if self.teams[idx] == 0 else (200, 50, 50)
@@ -392,7 +446,7 @@ class CurriculumFootballEnv(ParallelEnv, TaskSettableEnv):
 
         if mode == "rgb_array":
             if self.render_surface is None:
-                self.render_surface = pygame.Surface((WIDTH, HEIGHT))
+                self.render_surface = pygame.Surface((self.width, self.height))
             self._draw(self.render_surface)
             frame = pygame.surfarray.array3d(self.render_surface)
             return np.transpose(frame, (1, 0, 2))
