@@ -6,7 +6,7 @@ import numpy as np
 from ray.tune.registry import register_env
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
-from football_env import FootballEnv
+from src.v0.football_env import FootballEnv
 
 # 1. Wrapper function for RLlib
 def env_creator(args):

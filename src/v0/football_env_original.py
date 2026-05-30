@@ -28,7 +28,6 @@ GOAL_ASSIST_REWARD = 30.0
 GOAL_CONCEDE_PENALTY = 10.0
 POSSESSION_REWARD = 0.005
 BALL_PROGRESS_REWARD_SCALE = 0.02
-SHOT_QUALITY_REWARD = 0.5
 PASS_FIXED_REWARD = 2.0
 PASS_PROGRESS_SCALE = 0.01
 PASS_INTERCEPT_PENALTY = -2.0
@@ -36,6 +35,7 @@ PASS_RECEIVE_REWARD = 1.0
 PASS_PRESSURE_BONUS_SCALE = 1.0
 TACKLE_REWARD = 10
 MOVE_REWARD = 0.0005
+TEAM_REWARD_WEIGHT = 0.5
 
 
 ROTATION_SPEED = math.radians(10.0)
@@ -154,10 +154,6 @@ class RewardCalculator:
         return -0.001 * dist_to_ball
 
     def forward_position_penalty(self, agent_id, agent):
-        if "forward" in agent_id:
-            defense_line = self.width // 3 if agent["team"] == 0 else self.width * 2 // 3
-            if (agent["team"] == 0 and agent["x"] < defense_line) or (agent["team"] == 1 and agent["x"] > defense_line):
-                return -0.01
         return 0.0
 
     def step_rewards(self, agent_id, agent, ball):
@@ -197,11 +193,7 @@ class RewardCalculator:
         return rewards
 
     def shot_quality_reward(self, agent, shot_angle):
-        enemy_goal_x = WIDTH if agent["team"] == 0 else 0.0
-        enemy_goal_y = HEIGHT / 2.0
-        to_goal = math.atan2(enemy_goal_y - agent["y"], enemy_goal_x - agent["x"])
-        alignment = math.cos(angle_diff(shot_angle, to_goal))
-        return SHOT_QUALITY_REWARD * max(0.0, alignment)
+        return 0.0
 
     def goal_rewards(self, agents, ball, agent_states):
         rewards = {a: 0.0 for a in agents}
@@ -460,7 +452,6 @@ class FootballEnv(ParallelEnv):
                 self.ball["last_kick_goal_dist"] = math.hypot(self.ball["x"] - enemy_goal_x, self.ball["y"] - enemy_goal_y)
                 self.ball["vx"] = dir_x * MAX_SHOT_SPEED * shot_power
                 self.ball["vy"] = dir_y * MAX_SHOT_SPEED * shot_power
-                rewards[agent_id] += self.reward_calc.shot_quality_reward(agent, shot_angle)
 
         # 1b. Prevent player overlap (simple separation)
         agent_items = list(self.agent_states.items())
@@ -585,6 +576,16 @@ class FootballEnv(ParallelEnv):
 
         if any(terminations.values()) or any(truncations.values()):
             self.agents = [] # End episode
+
+        team_totals = {0: 0.0, 1: 0.0}
+        for agent_id, reward in rewards.items():
+            team_totals[self.agent_states[agent_id]["team"]] += reward
+
+        for agent_id in rewards.keys():
+            team = self.agent_states[agent_id]["team"]
+            opponent = 1 - team
+            team_delta = team_totals[team] - team_totals[opponent]
+            rewards[agent_id] = rewards[agent_id] + (TEAM_REWARD_WEIGHT * team_delta)
 
         observations = {a: self._get_local_observation(a) for a in self.agents}
         infos = {a: {} for a in self.agents}
